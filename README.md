@@ -14,6 +14,11 @@ Welcome to the **Terraform Remote State Challenge**! This is an essential skill 
 
 ## 🚀 Quick Start
 
+> **GitHub Account Required** for grading and submission (Options A & B).
+> Don't have one? [Create a free GitHub account](https://github.com/signup) - it's free and essential for any DevOps career!
+>
+> Option C works without GitHub but you won't get automated grading.
+
 ### Step 1: Get the Code
 
 **Option A: Fork (Easiest)**
