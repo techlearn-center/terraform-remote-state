@@ -976,89 +976,255 @@ python dashboard.py
 
 ---
 
-## Deploying to Real AWS
+## Deploying to Real AWS (Complete Step-by-Step Guide)
 
-Want to deploy to actual AWS instead of LocalStack? Here's how:
+> **🎯 This section is for students deploying to REAL AWS (not LocalStack)**
+>
+> Docker and LocalStack are **NOT required** for real AWS deployment!
 
-> **Note:** Docker and LocalStack are **NOT required** for real AWS deployment!
-> They are only used for free local testing. For real AWS, you just need:
-> - Terraform installed
-> - AWS CLI installed
-> - An AWS account with credentials
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    REAL AWS REQUIREMENTS                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ✅ Terraform CLI installed (v1.0+)                             │
+│  ✅ AWS CLI installed                                           │
+│  ✅ AWS Account (free tier works!)                              │
+│  ✅ IAM User with permissions                                   │
+│                                                                 │
+│  ❌ Docker NOT required                                         │
+│  ❌ LocalStack NOT required                                     │
+│  ❌ Python NOT required (optional for dashboard)                │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-### Step 1: Get AWS Credentials
+### Step 1: Create an AWS Account (Skip if you have one)
+
+1. Go to [AWS Free Tier](https://aws.amazon.com/free/)
+2. Sign up with email and credit card (won't be charged for free tier)
+3. Verify your account
+
+### Step 2: Create an IAM User with Proper Permissions
 
 1. Log in to [AWS Console](https://console.aws.amazon.com)
-2. Go to IAM → Users → Create User
-3. Attach `AdministratorAccess` policy (for learning only!)
-4. Create Access Key → Download credentials
+2. Go to **IAM** → **Users** → **Create User**
+3. User name: `terraform-admin`
+4. Click **Next**
+5. Select **Attach policies directly**
+6. Search and check: `AdministratorAccess` (for learning only!)
+7. Click **Next** → **Create User**
+8. Click on the user → **Security credentials** tab
+9. Click **Create access key**
+10. Select **Command Line Interface (CLI)**
+11. Check the confirmation box → **Next** → **Create access key**
+12. **⚠️ IMPORTANT: Download or copy both keys NOW** (you won't see the secret again!)
 
-### Step 2: Configure AWS CLI
+### Step 3: Install and Configure AWS CLI
 
 ```bash
-# Install AWS CLI if not installed
+# Check if AWS CLI is installed
+aws --version
+
+# If not installed, download from:
 # https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
 
-# Configure credentials
+# Configure AWS CLI with your credentials
 aws configure
-# Enter your Access Key ID
-# Enter your Secret Access Key
-# Default region: us-east-1
-# Default output: json
 ```
 
-### Step 3: Modify Terraform Files for Real AWS
-
-In each module's `main.tf`, **remove or comment out** the LocalStack configuration:
-
-```hcl
-provider "aws" {
-  region = var.aws_region
-
-  # REMOVE THESE LINES for real AWS:
-  # access_key = "test"
-  # secret_key = "test"
-  # endpoints { ... }
-  # skip_credentials_validation = true
-  # skip_metadata_api_check     = true
-  # s3_use_path_style           = true
-}
+You'll be prompted for:
+```
+AWS Access Key ID [None]: AKIA...YOUR_ACCESS_KEY
+AWS Secret Access Key [None]: ...YOUR_SECRET_KEY
+Default region name [None]: us-east-1
+Default output format [None]: json
 ```
 
-Your `main.tf` for real AWS should look like:
-
-```hcl
-provider "aws" {
-  region = var.aws_region
-  # AWS CLI credentials will be used automatically
-}
+**Verify it works:**
+```bash
+aws sts get-caller-identity
+# Should show your account ID and user ARN
 ```
 
-### Step 4: Deploy!
+### Step 4: Configure Terraform for Real AWS
+
+**⚠️ CRITICAL STEP - This is where most students get stuck!**
+
+The challenge defaults to LocalStack. You MUST tell Terraform to use real AWS.
+
+**Option A: Create terraform.tfvars files (Recommended)**
+
+Create a `terraform.tfvars` file in EACH module directory:
+
+```bash
+# Create terraform.tfvars for backend module
+cat > backend/terraform.tfvars << 'EOF'
+use_localstack = false
+aws_region     = "us-east-1"
+EOF
+
+# Create terraform.tfvars for iam module
+cat > iam/terraform.tfvars << 'EOF'
+use_localstack = false
+aws_region     = "us-east-1"
+EOF
+
+# Create terraform.tfvars for compute module
+cat > compute/terraform.tfvars << 'EOF'
+use_localstack = false
+aws_region     = "us-east-1"
+EOF
+```
+
+**Option B: Pass variables on command line**
+
+```bash
+terraform apply -var="use_localstack=false"
+```
+
+### Step 5: Deploy the Backend (S3 + DynamoDB)
 
 ```bash
 cd backend
-terraform init
-terraform apply
 
-cd ../iam
+# Initialize Terraform
 terraform init
-terraform apply
 
-cd ../compute
-terraform init
-terraform apply
+# Preview what will be created
+terraform plan -var="use_localstack=false"
+
+# Apply (creates S3 bucket and DynamoDB table)
+terraform apply -var="use_localstack=false"
+# Type 'yes' when prompted
 ```
 
-### Step 5: Clean Up (Important!)
+**What happens:**
+- Creates an S3 bucket for state storage (name: `terraform-state-dev-XXXXXXXX`)
+- Creates a DynamoDB table for locking (name: `terraform-state-lock`)
 
-To avoid AWS charges:
+**⏳ Wait for DynamoDB table:**
+DynamoDB tables take 30-60 seconds to become ACTIVE. You can check status:
+```bash
+aws dynamodb describe-table --table-name terraform-state-lock --query 'Table.TableStatus'
+# Should return "ACTIVE"
+```
+
+**Note the outputs:**
+```bash
+terraform output
+# Copy the bucket_name and table_name - you'll need them for the compute module
+```
+
+### Step 6: Deploy IAM User
 
 ```bash
-cd compute && terraform destroy -auto-approve
-cd ../iam && terraform destroy -auto-approve
-cd ../backend && terraform destroy -auto-approve
+cd ../iam
+
+terraform init
+terraform plan -var="use_localstack=false"
+terraform apply -var="use_localstack=false"
+# Type 'yes' when prompted
 ```
+
+**What happens:**
+- Creates an IAM user `terraform-deployer`
+- Creates access keys for the user
+- Creates and attaches a policy for S3/DynamoDB access
+
+**Get the credentials:**
+```bash
+terraform output access_key_id
+terraform output -raw secret_access_key
+```
+
+### Step 7: Deploy EC2 with Remote Backend
+
+```bash
+cd ../compute
+
+terraform init
+terraform plan -var="use_localstack=false"
+terraform apply -var="use_localstack=false"
+# Type 'yes' when prompted
+```
+
+**What happens:**
+- Generates an SSH key pair
+- Creates a security group allowing SSH (port 22)
+- Launches a t2.micro EC2 instance
+- Saves private key to `private-key.pem`
+
+### Step 8: Connect to Your EC2 Instance
+
+```bash
+# Get the SSH command
+terraform output -raw ssh_command
+
+# Or manually:
+# 1. Set permissions on key file
+chmod 600 private-key.pem
+
+# 2. Get the public IP
+terraform output public_ip
+
+# 3. Connect
+ssh -i private-key.pem ec2-user@<PUBLIC_IP>
+```
+
+### Step 9: Verify Everything Works
+
+```bash
+# Check S3 bucket exists
+aws s3 ls | grep terraform-state
+
+# Check DynamoDB table exists
+aws dynamodb list-tables
+
+# Check EC2 instance is running
+aws ec2 describe-instances --query 'Reservations[*].Instances[*].[InstanceId,State.Name,PublicIpAddress]' --output table
+
+# Check IAM user exists
+aws iam list-users --query 'Users[*].UserName'
+```
+
+### Step 10: Clean Up (IMPORTANT - Avoid Charges!)
+
+When you're done, destroy everything in **reverse order**:
+
+```bash
+# 1. Destroy compute first (EC2, security group, key pair)
+cd compute
+terraform destroy -var="use_localstack=false" -auto-approve
+
+# 2. Destroy IAM
+cd ../iam
+terraform destroy -var="use_localstack=false" -auto-approve
+
+# 3. Destroy backend last (S3, DynamoDB)
+cd ../backend
+terraform destroy -var="use_localstack=false" -auto-approve
+```
+
+**Verify cleanup:**
+```bash
+aws s3 ls | grep terraform-state  # Should be empty
+aws dynamodb list-tables           # Should not contain terraform-state-lock
+aws ec2 describe-instances --query 'Reservations[*].Instances[*].State.Name'
+```
+
+---
+
+## Real AWS Cost Estimates
+
+| Resource | Free Tier | After Free Tier |
+|----------|-----------|-----------------|
+| S3 Bucket | 5GB free for 12 months | ~$0.023/GB/month |
+| DynamoDB | 25GB free forever | ~$0.25/GB/month |
+| EC2 t2.micro | 750 hours/month for 12 months | ~$0.0116/hour |
+| Data Transfer | 100GB free | ~$0.09/GB |
+
+**For this challenge:** If you stay within free tier and clean up within a few hours, cost = **$0**
 
 ---
 
@@ -1299,90 +1465,165 @@ docker-compose up -d
 
 ### Real AWS Issues
 
-#### DynamoDB Table Stuck in "Creating" Mode
+#### Problem 1: DynamoDB Table Stuck in "Creating" Mode
 
-If your DynamoDB table stays in "CREATING" status:
+**Symptoms:**
+- `terraform apply` seems to hang
+- Table status shows "CREATING" for more than 2 minutes
+- Error: "Table is being created"
 
-**1. Check table status manually:**
+**Check table status:**
 ```bash
-aws dynamodb describe-table --table-name terraform-state-lock --region us-east-1
-# Look for "TableStatus" - it should be "ACTIVE"
+aws dynamodb describe-table --table-name terraform-state-lock --region us-east-1 --query 'Table.TableStatus'
+# Expected output: "ACTIVE"
 ```
 
-**2. Common causes and fixes:**
+**Common causes and fixes:**
 
-| Problem | Solution |
-|---------|----------|
-| **Still using LocalStack endpoint** | Set `use_localstack = false` in your terraform.tfvars or pass `-var="use_localstack=false"` |
-| **Table still creating** | Wait 30-60 seconds - DynamoDB tables take time to create |
-| **Missing IAM permissions** | Ensure your IAM user has `dynamodb:CreateTable`, `dynamodb:DescribeTable` permissions |
-| **Region mismatch** | Check `aws_region` variable matches your AWS CLI configuration |
-| **Stale Terraform state** | Run `terraform refresh` to sync state with actual AWS resources |
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| Terraform tries to connect to localhost:4566 | Still configured for LocalStack | Add `-var="use_localstack=false"` or create terraform.tfvars |
+| Table shows "CREATING" | Normal - tables take 30-60 seconds | Wait and retry `terraform apply` |
+| "AccessDeniedException" | Missing IAM permissions | Attach AdministratorAccess or add DynamoDB permissions |
+| "ResourceNotFoundException" | Wrong region | Check `aws_region` matches your AWS CLI config |
+| "Table already exists" | Previous partial run | Import with `terraform import` or delete table manually |
 
-**3. Quick fix for real AWS deployment:**
-
-Create a `terraform.tfvars` file in the `backend/` directory:
-```hcl
-# backend/terraform.tfvars
-use_localstack = false
-aws_region     = "us-east-1"
+**Quick fix - Create terraform.tfvars:**
+```bash
+# Run this in each module directory (backend, iam, compute)
+echo 'use_localstack = false' > terraform.tfvars
+echo 'aws_region = "us-east-1"' >> terraform.tfvars
 ```
 
-Or run with the variable:
+**Nuclear option - Start fresh:**
 ```bash
-cd backend
+# 1. Delete any existing resources
+aws dynamodb delete-table --table-name terraform-state-lock --region us-east-1 2>/dev/null
+aws s3 rb s3://$(aws s3 ls | grep terraform-state | awk '{print $3}') --force 2>/dev/null
+
+# 2. Clear Terraform state
+rm -rf .terraform .terraform.lock.hcl terraform.tfstate*
+
+# 3. Start over
 terraform init
 terraform apply -var="use_localstack=false"
 ```
 
-**4. If table is truly stuck (rare):**
+#### Problem 2: "Error: No valid credential sources found"
+
+**Cause:** AWS CLI not configured or credentials expired
+
+**Fix:**
 ```bash
-# Delete the stuck table and let Terraform recreate it
-aws dynamodb delete-table --table-name terraform-state-lock --region us-east-1
+# Check if credentials are configured
+aws sts get-caller-identity
 
-# Wait for deletion to complete
-aws dynamodb wait table-not-exists --table-name terraform-state-lock --region us-east-1
+# If error, reconfigure:
+aws configure
 
-# Re-run Terraform
+# Or check your credentials file
+cat ~/.aws/credentials
+```
+
+#### Problem 3: S3 Bucket "BucketAlreadyExists" Error
+
+**Cause:** S3 bucket names are globally unique across ALL AWS accounts
+
+**Fix:**
+```bash
+# Option 1: Let the random suffix handle it (built into the code)
+# Just run terraform apply again
+
+# Option 2: Use a custom project name
+terraform apply -var="use_localstack=false" -var="project_name=mycompany-tfstate"
+```
+
+#### Problem 4: EC2 Instance Has No Public IP
+
+**Symptoms:**
+- Instance running but `public_ip` output is empty
+- Cannot SSH to instance
+
+**Causes and fixes:**
+
+| Cause | Fix |
+|-------|-----|
+| Subnet has no auto-assign public IP | Use a public subnet or set `associate_public_ip_address = true` |
+| No Internet Gateway | Create and attach an IGW to the VPC |
+| Route table missing 0.0.0.0/0 route | Add route to Internet Gateway |
+
+**Quick check:**
+```bash
+# Get instance details
+aws ec2 describe-instances --query 'Reservations[*].Instances[*].[InstanceId,PublicIpAddress,SubnetId]' --output table
+```
+
+#### Problem 5: SSH "Permission denied" or "Connection refused"
+
+**"Permission denied (publickey)":**
+```bash
+# Fix key permissions
+chmod 600 private-key.pem
+
+# Make sure you're using the right username
+# Amazon Linux: ec2-user
+# Ubuntu: ubuntu
+# Debian: admin
+ssh -i private-key.pem ec2-user@<PUBLIC_IP>
+```
+
+**"Connection refused" or timeout:**
+```bash
+# Check security group allows SSH
+aws ec2 describe-security-groups --query 'SecurityGroups[*].[GroupName,IpPermissions]' --output table
+
+# Check instance is running
+aws ec2 describe-instances --query 'Reservations[*].Instances[*].[State.Name,PublicIpAddress]' --output table
+```
+
+#### Problem 6: "Error: Invalid provider configuration"
+
+**Cause:** Mixed LocalStack and real AWS settings or stale cache
+
+**Fix:**
+```bash
+# Clear everything and start fresh
+rm -rf .terraform .terraform.lock.hcl terraform.tfstate*
+
+# Reinitialize
+terraform init
+
+# Apply with explicit variable
 terraform apply -var="use_localstack=false"
 ```
 
-**5. Check your IAM permissions:**
+#### Problem 7: "Error acquiring state lock"
 
-Your IAM user needs these DynamoDB permissions:
-```json
-{
-  "Effect": "Allow",
-  "Action": [
-    "dynamodb:CreateTable",
-    "dynamodb:DescribeTable",
-    "dynamodb:DeleteTable",
-    "dynamodb:GetItem",
-    "dynamodb:PutItem",
-    "dynamodb:DeleteItem"
-  ],
-  "Resource": "*"
-}
+**Cause:** Previous terraform run crashed or someone else is running terraform
+
+**Fix:**
+```bash
+# Get the lock ID from the error message, then:
+terraform force-unlock <LOCK_ID>
+
+# Or check DynamoDB for stale locks:
+aws dynamodb scan --table-name terraform-state-lock
 ```
 
-#### S3 Bucket Creation Issues
+#### Problem 8: Resources Created but terraform.tfstate is Empty
 
+**Cause:** State wasn't saved properly
+
+**Fix - Import existing resources:**
 ```bash
-# Check if bucket exists
-aws s3 ls | grep terraform-state
+# Import S3 bucket
+terraform import aws_s3_bucket.terraform_state <bucket-name>
 
-# Bucket names must be globally unique
-# If you get "BucketAlreadyExists", the random suffix will help
-# Or change project_name in variables
-```
+# Import DynamoDB table
+terraform import aws_dynamodb_table.terraform_locks terraform-state-lock
 
-#### "Invalid provider configuration" Error
-
-This happens when mixing LocalStack and real AWS settings:
-```bash
-# Clear Terraform cache and reinitialize
-rm -rf .terraform .terraform.lock.hcl
-terraform init
+# Then run apply to sync
+terraform apply -var="use_localstack=false"
 ```
 
 ---
